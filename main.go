@@ -7,6 +7,8 @@ import (
 	"github.com/xlab/suplog"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+	"io"
+	"log"
 	"net/http"
 	"os"
 	"portfolio-bank-balance-checks/model"
@@ -59,11 +61,28 @@ func main() {
 		//##-> fetch chain bank, total, available on account x using 'x-cosmos-block-height: {latest_block}'
 		comp3, err := GetComparableFromChain(account.BaseAccount.Address)
 
-		fmt.Printf("comp1: %+v\n", comp1)
-		fmt.Printf("comp2: %+v\n", comp2)
-		fmt.Printf("comp3: %+v\n", comp3)
+		//##-> compare results
+		eq1 := comp1.IsEqual(comp2)
+		if !eq1 {
+			suplog.Errorf("account %s is not equal in mongodb and portfolio api\n", account.BaseAccount.Address)
+		}
+		eq2 := comp2.IsEqual(comp3)
+		if !eq2 {
+			suplog.Warningf("account %s is not equal in portfolio api and chain\n", account.BaseAccount.Address)
+		}
+		eq3 := comp1.IsEqual(comp3)
+		if !eq3 {
+			suplog.Warningf("account %s is not equal in mongodb and chain\n", account.BaseAccount.Address)
+		}
 
-		fmt.Printf("processing account %d/%d: %s\n", id, len(accounts), account.BaseAccount.Address)
+		if !eq1 || !eq2 || !eq3 {
+			suplog.Debugf("mongoRaw:\t\t%+v\n", comp1)
+			suplog.Debugf("portfolioAPI:\t\t%+v\n", comp2)
+			suplog.Debugf("chain:\t\t\t%+v\n", comp3)
+			appendComparableToFile(comp1, comp2, comp3)
+		}
+
+		fmt.Printf("processing account %d/%d: %s\n", id+1, len(accounts), account.BaseAccount.Address)
 	}
 
 	//##-> compare results and store discrepancies in a file
@@ -85,12 +104,15 @@ func GetAllAccounts() (accounts []model.Account, err error) {
 		panic(err)
 	}
 
-	err = json.NewDecoder(resp.Body).Decode(&accounts)
+	//PrintBody(resp)
+
+	respAccount := model.RespAccounts{}
+	err = json.NewDecoder(resp.Body).Decode(&respAccount)
 	if err != nil {
 		return accounts, err
 	}
-	suplog.Infof("fond %d accounts", len(accounts))
-	return accounts, nil
+	suplog.Infof("found %d accounts", len(respAccount.Accounts))
+	return respAccount.Accounts, nil
 }
 
 // connect to mongo repset db or return error
@@ -108,4 +130,47 @@ func mongoConnect() (db *mongo.Database, err error) {
 	suplog.Infoln("Connected to MongoDB!")
 
 	return client.Database("exchangeV2"), nil
+}
+
+func PrintBody(resp *http.Response) {
+
+	b, err := io.ReadAll(resp.Body)
+	// b, err := ioutil.ReadAll(resp.Body)  Go.1.15 and earlier
+	if err != nil {
+		log.Fatalln(err)
+	}
+
+	fmt.Println(string(b))
+}
+
+func appendComparableToFile(comp ...*model.ComparablePortfolio) {
+	for id, c := range comp {
+		//##-> append to file
+		f, err := os.OpenFile("balance_check.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			panic(err)
+		}
+		defer f.Close()
+		_, err = f.WriteString("Detected discrepancy:\n")
+		if err != nil {
+			panic(err)
+		}
+		switch id {
+		case 0:
+			if _, err = f.WriteString("mongoRaw:\n"); err != nil {
+				panic(err)
+			}
+		case 1:
+			if _, err = f.WriteString("portfolioAPI:\n"); err != nil {
+				panic(err)
+			}
+		case 2:
+			if _, err = f.WriteString("chain:\n"); err != nil {
+				panic(err)
+			}
+		}
+		if _, err = f.WriteString(fmt.Sprintf("%+v\n", c)); err != nil {
+			panic(err)
+		}
+	}
 }

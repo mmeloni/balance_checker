@@ -21,19 +21,37 @@ import (
 
 func GetComparableFromMongodb(db *mongo.Database, address string) (comparable *model.ComparablePortfolio, err error) {
 	var portfolio []model.Portfolio
-	err = db.Collection("portfolio").FindOne(context.Background(), bson.M{"address": address}).Decode(&portfolio)
+	cur, err := db.Collection("portfolio").Find(context.Background(), bson.M{"accountAddress": address})
 	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return model.NewComparablePortfolio(), nil
+		}
 		panic(err)
+	}
+	defer cur.Close(context.Background())
+	for cur.Next(context.Background()) {
+		var p model.Portfolio
+		err := cur.Decode(&p)
+		if err != nil {
+			panic(err)
+		}
+		portfolio = append(portfolio, p)
 	}
 	comparable = model.NewComparablePortfolio()
 	for _, p := range portfolio {
 		switch p.Type {
 		case 1:
-			comparable.AvailableBalances[p.SubaccountId][p.Denom] = p.Amount.String()
+			if _, ok := comparable.AvailableBalances[p.SubaccountId]; !ok {
+				comparable.AvailableBalances[p.SubaccountId] = make(map[string]string)
+			}
+			comparable.AvailableBalances[p.SubaccountId][p.Denom] = PrimitiveDecimal128ToString(p.Amount)
 		case 2:
-			comparable.TotalBalances[p.SubaccountId][p.Denom] = p.Amount.String()
+			if _, ok := comparable.TotalBalances[p.SubaccountId]; !ok {
+				comparable.TotalBalances[p.SubaccountId] = make(map[string]string)
+			}
+			comparable.TotalBalances[p.SubaccountId][p.Denom] = PrimitiveDecimal128ToString(p.Amount)
 		default:
-			comparable.BankBalances[p.Denom] = p.Amount.String()
+			comparable.BankBalances[p.Denom] = PrimitiveDecimal128ToString(p.Amount)
 		}
 	}
 	comparable.AccountAddress = address
@@ -51,11 +69,29 @@ func GetComparableFromExchangeAPI(address string) (comparable *model.ComparableP
 	comparable = model.NewComparablePortfolio()
 
 	for _, p := range portfolioAPIResp.Portfolio.BankBalances {
-		comparable.BankBalances[p.Denom] = p.Amount
+		bankBalanceDecimal, err := types.NewDecFromStr(p.Amount)
+		if err != nil {
+			return comparable, err
+		}
+		comparable.BankBalances[p.Denom] = bankBalanceDecimal.String()
 	}
 	for _, subaccount := range portfolioAPIResp.Portfolio.Subaccounts {
-		comparable.AvailableBalances[subaccount.Subaccount][subaccount.Denom] = subaccount.Deposit.AvailableBalance
-		comparable.TotalBalances[subaccount.Subaccount][subaccount.Denom] = subaccount.Deposit.TotalBalance
+		if _, ok := comparable.AvailableBalances[subaccount.Subaccount]; !ok {
+			comparable.AvailableBalances[subaccount.Subaccount] = make(map[string]string)
+		}
+		if _, ok := comparable.TotalBalances[subaccount.Subaccount]; !ok {
+			comparable.TotalBalances[subaccount.Subaccount] = make(map[string]string)
+		}
+		availableBalanceDecimal, err := types.NewDecFromStr(subaccount.Deposit.AvailableBalance)
+		if err != nil {
+			return comparable, err
+		}
+		totalBalanceDecimal, err := types.NewDecFromStr(subaccount.Deposit.TotalBalance)
+		if err != nil {
+			return comparable, err
+		}
+		comparable.AvailableBalances[subaccount.Subaccount][subaccount.Denom] = availableBalanceDecimal.String()
+		comparable.TotalBalances[subaccount.Subaccount][subaccount.Denom] = totalBalanceDecimal.String()
 	}
 	comparable.AccountAddress = address
 
@@ -77,7 +113,11 @@ func getPortfolioAPI(address string) (portApiResp model.PortfolioApiResponse, er
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		panic(err)
+		if resp.StatusCode == http.StatusNotFound {
+			return portApiResp, nil
+		}
+		PrintBody(resp)
+		panic(fmt.Errorf("status code is not 200, it is %d", resp.StatusCode))
 	}
 
 	err = json.NewDecoder(resp.Body).Decode(&portApiResp)
@@ -231,6 +271,12 @@ func initChainTotalAndAvailableBalances() (comparables map[string]*model.Compara
 			Type:           int8(2),
 		}
 
+		if _, ok := comp.AvailableBalances[portfolioAvailableBalance.SubaccountId]; !ok {
+			comp.AvailableBalances[portfolioAvailableBalance.SubaccountId] = make(map[string]string)
+		}
+		if _, ok := comp.TotalBalances[portfolioTotalBalance.SubaccountId]; !ok {
+			comp.TotalBalances[portfolioTotalBalance.SubaccountId] = make(map[string]string)
+		}
 		comp.AvailableBalances[portfolioAvailableBalance.SubaccountId][portfolioAvailableBalance.Denom] = portfolioAvailableBalance.Amount.String()
 		comp.TotalBalances[portfolioTotalBalance.SubaccountId][portfolioTotalBalance.Denom] = portfolioTotalBalance.Amount.String()
 
@@ -241,4 +287,17 @@ func initChainTotalAndAvailableBalances() (comparables map[string]*model.Compara
 
 	suplog.Infof("Total comparables fetched from chain: %d\n", len(comparables))
 	return comparables, nil
+}
+
+func DecToString(dec types.Dec) string {
+	if dec.IsZero() {
+		return "0"
+	}
+	return dec.String()
+}
+func PrimitiveDecimal128ToString(dec primitive.Decimal128) string {
+	if dec.IsZero() {
+		return "0"
+	}
+	return dec.String()
 }
