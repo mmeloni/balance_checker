@@ -250,7 +250,6 @@ func initChainTotalAndAvailableBalances() (comparables map[string]*model.Compara
 	comparables = make(map[string]*model.ComparablePortfolio, collNumber)
 	i := 0
 	for _, subAccEntry := range balances.Balances {
-		comp := model.NewComparablePortfolio()
 
 		i++
 		cosmtypes.GetConfig().SetBech32PrefixForAccount("inj", "injpub")
@@ -263,6 +262,10 @@ func initChainTotalAndAvailableBalances() (comparables map[string]*model.Compara
 
 		addr := cosmtypes.AccAddress(slice)
 		accAddress := addr.String()
+
+		if _, ok := comparables[accAddress]; !ok {
+			comparables[accAddress] = model.NewComparablePortfolio()
+		}
 
 		availableBalancesDec, err := types.NewDecFromStr(subAccEntry.Deposits.AvailableBalance)
 		if err != nil {
@@ -293,26 +296,25 @@ func initChainTotalAndAvailableBalances() (comparables map[string]*model.Compara
 			Type:           int8(2),
 		}
 
-		if _, ok := comp.AvailableBalances[portfolioAvailableBalance.SubaccountId]; !ok {
-			comp.AvailableBalances[portfolioAvailableBalance.SubaccountId] = make(map[string]string)
+		if _, ok := comparables[accAddress].AvailableBalances[portfolioAvailableBalance.SubaccountId]; !ok {
+			comparables[accAddress].AvailableBalances[portfolioAvailableBalance.SubaccountId] = make(map[string]string)
 		}
-		if _, ok := comp.TotalBalances[portfolioTotalBalance.SubaccountId]; !ok {
-			comp.TotalBalances[portfolioTotalBalance.SubaccountId] = make(map[string]string)
+		if _, ok := comparables[accAddress].TotalBalances[portfolioTotalBalance.SubaccountId]; !ok {
+			comparables[accAddress].TotalBalances[portfolioTotalBalance.SubaccountId] = make(map[string]string)
 		}
 		if portfolioAvailableBalance.Amount.IsZero() {
-			comp.AvailableBalances[portfolioAvailableBalance.SubaccountId][portfolioAvailableBalance.Denom] = "0"
+			comparables[accAddress].AvailableBalances[portfolioAvailableBalance.SubaccountId][portfolioAvailableBalance.Denom] = "0"
 		} else {
-			comp.AvailableBalances[portfolioAvailableBalance.SubaccountId][portfolioAvailableBalance.Denom] = portfolioAvailableBalance.Amount.String()
+			comparables[accAddress].AvailableBalances[portfolioAvailableBalance.SubaccountId][portfolioAvailableBalance.Denom] = portfolioAvailableBalance.Amount.String()
 		}
 		if portfolioTotalBalance.Amount.IsZero() {
-			comp.TotalBalances[portfolioTotalBalance.SubaccountId][portfolioTotalBalance.Denom] = "0"
+			comparables[accAddress].TotalBalances[portfolioTotalBalance.SubaccountId][portfolioTotalBalance.Denom] = "0"
 		} else {
-			comp.TotalBalances[portfolioTotalBalance.SubaccountId][portfolioTotalBalance.Denom] = portfolioTotalBalance.Amount.String()
+			comparables[accAddress].TotalBalances[portfolioTotalBalance.SubaccountId][portfolioTotalBalance.Denom] = portfolioTotalBalance.Amount.String()
 		}
 
-		comp.AccountAddress = accAddress
+		comparables[accAddress].AccountAddress = accAddress
 
-		comparables[accAddress] = comp
 	}
 
 	suplog.Infof("Total comparables fetched from chain: %d\n", len(comparables))
