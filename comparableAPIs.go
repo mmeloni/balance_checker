@@ -2,15 +2,19 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"github.com/xlab/suplog"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
+	"io"
+	"log"
 	"net/http"
 	"os"
 	"portfolio-bank-balance-checks/model"
+	"strings"
 
 	"github.com/cosmos/cosmos-sdk/types"
 
@@ -105,19 +109,37 @@ func getPortfolioAPI(address string) (portApiResp model.PortfolioApiResponse, er
 		return portApiResp, fmt.Errorf("INDEXER_EXCHANGE_URL env is not set")
 	}
 
-	suplog.Infoln("exchangeAddress: ", exchangeAddress)
-	//api/exchange/portfolio/v2/portfolio/inj1cml96vmptgw99syqrrz8az79xer2pcgp0a885r
-	resp, err := http.Get(fmt.Sprintf("%s/api/exchange/portfolio/v2/portfolio/%s", exchangeAddress, address))
+	client := http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true,
+			},
+		},
+	}
+	req, err := http.NewRequest("GET", fmt.Sprintf("%s/api/exchange/portfolio/v2/portfolio/%s", exchangeAddress, address), nil)
+	if err != nil {
+		return portApiResp, err
+	}
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return portApiResp, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		b, err := io.ReadAll(resp.Body)
+		if err != nil {
+			log.Fatalln(err)
+		}
 		if resp.StatusCode == http.StatusNotFound {
 			return portApiResp, nil
 		}
-		PrintBody(resp)
-		panic(fmt.Errorf("status code is not 200, it is %d", resp.StatusCode))
+		if resp.StatusCode == http.StatusInternalServerError {
+			if strings.Contains(string(b), "account address not found") {
+				return portApiResp, nil
+			}
+		}
+		panic(fmt.Errorf("status code is not 200, it is %d, %s", resp.StatusCode, string(b)))
 	}
 
 	err = json.NewDecoder(resp.Body).Decode(&portApiResp)
@@ -277,8 +299,16 @@ func initChainTotalAndAvailableBalances() (comparables map[string]*model.Compara
 		if _, ok := comp.TotalBalances[portfolioTotalBalance.SubaccountId]; !ok {
 			comp.TotalBalances[portfolioTotalBalance.SubaccountId] = make(map[string]string)
 		}
-		comp.AvailableBalances[portfolioAvailableBalance.SubaccountId][portfolioAvailableBalance.Denom] = portfolioAvailableBalance.Amount.String()
-		comp.TotalBalances[portfolioTotalBalance.SubaccountId][portfolioTotalBalance.Denom] = portfolioTotalBalance.Amount.String()
+		if portfolioAvailableBalance.Amount.IsZero() {
+			comp.AvailableBalances[portfolioAvailableBalance.SubaccountId][portfolioAvailableBalance.Denom] = "0"
+		} else {
+			comp.AvailableBalances[portfolioAvailableBalance.SubaccountId][portfolioAvailableBalance.Denom] = portfolioAvailableBalance.Amount.String()
+		}
+		if portfolioTotalBalance.Amount.IsZero() {
+			comp.TotalBalances[portfolioTotalBalance.SubaccountId][portfolioTotalBalance.Denom] = "0"
+		} else {
+			comp.TotalBalances[portfolioTotalBalance.SubaccountId][portfolioTotalBalance.Denom] = portfolioTotalBalance.Amount.String()
+		}
 
 		comp.AccountAddress = accAddress
 

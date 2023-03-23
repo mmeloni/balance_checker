@@ -23,7 +23,11 @@ package model
 	}
 */
 type RespAccounts struct {
-	Accounts []Account `json:"accounts"`
+	Accounts   []Account `json:"accounts"`
+	Pagination struct {
+		NextKey string `json:"next_key"`
+		Total   string `json:"total"`
+	}
 }
 
 type Account struct {
